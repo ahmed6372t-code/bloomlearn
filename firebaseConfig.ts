@@ -1,7 +1,10 @@
 import { initializeApp, getApps } from "firebase/app";
-import { initializeAuth, getAuth, indexedDBLocalPersistence } from "firebase/auth";
+import { initializeAuth, getAuth } from "firebase/auth";
+// @ts-ignore
+import { getReactNativePersistence } from "@firebase/auth";
 import { initializeFirestore, getFirestore } from "firebase/firestore";
 import { getFunctions } from "firebase/functions";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export const firebaseConfig = {
   apiKey: "AIzaSyBFnQVweQtxfdS9xN7-Y2q08tzdDljMoKc",
@@ -18,17 +21,18 @@ export const firebaseConfig = {
 const _consoleWarn = console.warn.bind(console);
 console.warn = (...args: unknown[]) => {
   if (typeof args[0] === "string" && args[0].includes("getReactNativePersistence")) return;
+  if (typeof args[0] === "string" && args[0].includes("AsyncStorage has been extracted")) return;
   _consoleWarn(...args);
 };
 
 // Initialize Firebase app only once
 export const app = !getApps().length ? initializeApp(firebaseConfig) : getApps()[0];
 
-// Initialize Auth with indexedDB persistence (correct for Firebase 12 in React Native)
+// Initialize Auth with AsyncStorage persistence (correct for React Native)
 let authInstance;
 try {
   authInstance = initializeAuth(app, {
-    persistence: indexedDBLocalPersistence,
+    persistence: getReactNativePersistence(AsyncStorage),
   });
 } catch {
   authInstance = getAuth(app);
