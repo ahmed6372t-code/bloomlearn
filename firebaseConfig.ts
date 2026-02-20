@@ -1,5 +1,5 @@
 import { initializeApp, getApps } from "firebase/app";
-import { initializeAuth, getAuth } from "firebase/auth";
+import { initializeAuth, getAuth, indexedDBLocalPersistence } from "firebase/auth";
 import { initializeFirestore, getFirestore } from "firebase/firestore";
 import { getFunctions } from "firebase/functions";
 
@@ -16,10 +16,12 @@ export const firebaseConfig = {
 // Initialize Firebase app only once
 export const app = !getApps().length ? initializeApp(firebaseConfig) : getApps()[0];
 
-// Initialize Auth with fallback (Firebase 12 JS SDK does not support custom RN persistence)
+// Initialize Auth with indexedDB persistence (correct for Firebase 12 in React Native)
 let authInstance;
 try {
-  authInstance = initializeAuth(app, {});
+  authInstance = initializeAuth(app, {
+    persistence: indexedDBLocalPersistence,
+  });
 } catch {
   authInstance = getAuth(app);
 }
