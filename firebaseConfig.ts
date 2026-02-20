@@ -1,0 +1,40 @@
+import { initializeApp, getApps } from "firebase/app";
+import { initializeAuth, getAuth } from "firebase/auth";
+import { initializeFirestore, getFirestore } from "firebase/firestore";
+import { getFunctions } from "firebase/functions";
+
+export const firebaseConfig = {
+  apiKey: "AIzaSyBFnQVweQtxfdS9xN7-Y2q08tzdDljMoKc",
+  authDomain: "gen-lang-client-0865855905.firebaseapp.com",
+  projectId: "gen-lang-client-0865855905",
+  storageBucket: "gen-lang-client-0865855905.firebasestorage.app",
+  messagingSenderId: "120361277566",
+  appId: "1:120361277566:web:4da2fc11aee2917c1be02f",
+  measurementId: "G-7GKW1H4NLH"
+};
+
+// Initialize Firebase app only once
+export const app = !getApps().length ? initializeApp(firebaseConfig) : getApps()[0];
+
+// Initialize Auth with fallback (Firebase 12 JS SDK does not support custom RN persistence)
+let authInstance;
+try {
+  authInstance = initializeAuth(app, {});
+} catch {
+  authInstance = getAuth(app);
+}
+export const auth = authInstance;
+
+// Initialize Firestore with long polling for React Native
+let dbInstance;
+try {
+  dbInstance = getFirestore(app);
+} catch {
+  dbInstance = initializeFirestore(app, {
+    experimentalForceLongPolling: true,
+  });
+}
+export const db = dbInstance;
+
+// Initialize Cloud Functions
+export const functions = getFunctions(app);
