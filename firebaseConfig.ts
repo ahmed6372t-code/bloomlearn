@@ -13,6 +13,14 @@ export const firebaseConfig = {
   measurementId: "G-7GKW1H4NLH"
 };
 
+// Firebase 12 logs a false-positive RN warning about getReactNativePersistence
+// (the API was removed from the JS SDK in v11). Suppress it before initializing.
+const _consoleWarn = console.warn.bind(console);
+console.warn = (...args: unknown[]) => {
+  if (typeof args[0] === "string" && args[0].includes("getReactNativePersistence")) return;
+  _consoleWarn(...args);
+};
+
 // Initialize Firebase app only once
 export const app = !getApps().length ? initializeApp(firebaseConfig) : getApps()[0];
 
