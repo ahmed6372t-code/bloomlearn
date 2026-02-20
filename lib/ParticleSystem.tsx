@@ -1,15 +1,5 @@
-import React, { useEffect } from "react";
-import { View, StyleSheet } from "react-native";
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  withDelay,
-  Easing,
-  interpolate,
-  Extrapolate,
-  runOnJS,
-} from "react-native-reanimated";
+import React, { useEffect, useRef } from "react";
+import { View, StyleSheet, Animated, Easing } from "react-native";
 
 export interface Particle {
   id: string;
@@ -50,71 +40,62 @@ interface ParticleItemProps {
 }
 
 const ParticleItem: React.FC<ParticleItemProps> = ({ particle, onComplete }) => {
-  const progress = useSharedValue(0);
+  const progress = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    progress.value = withDelay(
-      particle.delay,
-      withTiming(1, {
+    Animated.sequence([
+      Animated.delay(particle.delay),
+      Animated.timing(progress, {
+        toValue: 1,
         duration: particle.duration,
         easing: Easing.bezier(0.25, 0.46, 0.45, 0.94),
-      })
-    );
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      if (onComplete) onComplete();
+    });
   }, []);
 
-  const animatedStyle = useAnimatedStyle(() => {
-    const x = interpolate(
-      progress.value,
-      [0, 1],
-      [particle.x, particle.targetX],
-      Extrapolate.CLAMP
-    );
+  // Derive animated properties using RN Animated.Value.interpolate()
+  const x = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [particle.x, particle.targetX],
+  });
 
-    const y = interpolate(
-      progress.value,
-      [0, 1],
-      [particle.y, particle.targetY],
-      Extrapolate.CLAMP
-    );
+  const y = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [particle.y, particle.targetY],
+  });
 
-    // Fade out as particle reaches target
-    const opacity = interpolate(
-      progress.value,
-      [0, 0.7, 1],
-      [1, 1, 0],
-      Extrapolate.CLAMP
-    );
+  const opacity = progress.interpolate({
+    inputRange: [0, 0.7, 1],
+    outputRange: [1, 1, 0],
+  });
 
-    // Scale: start small, grow slightly, then shrink
-    const scale = interpolate(
-      progress.value,
-      [0, 0.3, 1],
-      [0.3, 1.2, 0.4],
-      Extrapolate.CLAMP
-    );
+  const scale = progress.interpolate({
+    inputRange: [0, 0.3, 1],
+    outputRange: [0.3, 1.2, 0.4],
+  });
 
-    // Rotation for visual interest
-    const rotation = interpolate(progress.value, [0, 1], [0, 360]);
-
-    return {
-      transform: [
-        { translateX: x },
-        { translateY: y },
-        { scale },
-        { rotate: `${rotation}deg` },
-      ],
-      opacity,
-    };
+  const rotation = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: ["0deg", "360deg"],
   });
 
   return (
     <Animated.Text
       style={[
         styles.particle,
-        animatedStyle,
         {
           left: 0,
           top: 0,
+          opacity,
+          transform: [
+            { translateX: x },
+            { translateY: y },
+            { scale },
+            { rotate: rotation },
+          ],
         },
       ]}
     >
@@ -151,22 +132,18 @@ export function generateExplosionParticles(
   const emojis = ["🌱", "🌿", "🌾", "✨", "🍃"];
 
   for (let i = 0; i < count; i++) {
-    // Distribute particles in a circle around source
     const angle = (i / count) * Math.PI * 2;
-    const distance = Math.random() * 60 + 40; // 40-100px from center
-
-    const explodeX = sourceX + Math.cos(angle) * distance;
-    const explodeY = sourceY + Math.sin(angle) * distance;
+    const distance = Math.random() * 60 + 40;
 
     particles.push({
       id: `particle-${i}-${Date.now()}`,
       x: sourceX,
       y: sourceY,
-      targetX,
-      targetY,
+      targetX: sourceX + Math.cos(angle) * distance,
+      targetY: sourceY + Math.sin(angle) * distance,
       emoji: emojis[Math.floor(Math.random() * emojis.length)],
-      duration: 800 + Math.random() * 400, // 800-1200ms
-      delay: Math.random() * 50, // Stagger by 0-50ms
+      duration: 800 + Math.random() * 400,
+      delay: Math.random() * 50,
     });
   }
 
