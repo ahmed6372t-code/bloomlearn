@@ -1,18 +1,11 @@
 import { useRef, useState, useEffect, useMemo } from "react";
-import {
-  StyleSheet,
-  Text,
-  View,
-  TouchableOpacity,
-  ScrollView,
-  Modal,
-  Animated,
-} from "react-native";
+import { StyleSheet, Text, View, TouchableOpacity, Modal, Animated } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { Redirect, useRouter, useLocalSearchParams } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { useAuth } from "../../context/AuthContext";
 import { useProgress } from "../../context/ProgressContext";
+import { useTheme } from "../../context/ThemeContext";
 import {
   updateCombo,
   getComboMultiplier,
@@ -25,17 +18,26 @@ import {
 } from "../../lib/engagement";
 import LevelUpSplash from "./LevelUpSplash";
 
-const STUDY_SECONDS = 25;
 const QUESTION_SECONDS = 12;
-const MAX_LIVES = 3;
+const MAX_LIVES = 5;
+const BASE_POINTS = 600;
+const SPEED_POINTS = 400;
+const HINT_PENALTY = 0.85;
+const ANSWER_COLORS = [
+  { background: "#FFF1F0", border: "#EF9A9A", text: "#C62828" },
+  { background: "#E3F2FD", border: "#90CAF9", text: "#1565C0" },
+  { background: "#FFF8E1", border: "#FFCC80", text: "#EF6C00" },
+  { background: "#E8F5E9", border: "#A5D6A7", text: "#2E7D32" },
+];
 
-type Phase = "study" | "play" | "complete" | "gameover";
+type Phase = "play" | "complete" | "gameover";
 
 export default function UnderstandScreen() {
   const { user } = useAuth();
   const router = useRouter();
-  const { materialId } = useLocalSearchParams<{ materialId: string }>();
+  const { materialId, watering } = useLocalSearchParams<{ materialId: string; watering?: string }>();
   const { state, completeStage } = useProgress();
+  const { isDark, colors } = useTheme();
 
   const material = materialId ? state.materials[materialId] : undefined;
   const alreadyDone = material?.stagesCompleted?.includes("understand") ?? false;
@@ -63,8 +65,9 @@ export default function UnderstandScreen() {
       const j = Math.floor(Math.random() * (i + 1));
       [qs[i], qs[j]] = [qs[j], qs[i]];
     }
-    return qs.slice(0, Math.min(10, qs.length));
-  }, [concepts, facts]);
+    const numQ = watering === "true" ? Math.max(3, Math.floor(10 / 2)) : 10;
+    return qs.slice(0, Math.min(numQ, qs.length));
+  }, [concepts, facts, watering]);
 
   // Build answer options: all concept names (for multiple choice)
   const conceptNames = useMemo(
@@ -72,13 +75,13 @@ export default function UnderstandScreen() {
     [concepts]
   );
 
-  const [phase, setPhase] = useState<Phase>("study");
-  const [studyTimer, setStudyTimer] = useState(STUDY_SECONDS);
+  const [phase, setPhase] = useState<Phase>("play");
   const [questionTimer, setQuestionTimer] = useState(QUESTION_SECONDS);
   const [currentQ, setCurrentQ] = useState(0);
   const [lives, setLives] = useState(MAX_LIVES);
   const [collected, setCollected] = useState(0);
   const [earnedXP, setEarnedXP] = useState(0);
+  const [score, setScore] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
   const [correctAnswer, setCorrectAnswer] = useState<string | null>(null);
   const [combo, setCombo] = useState(0);
@@ -94,7 +97,8 @@ export default function UnderstandScreen() {
   const [questionStartTime, setQuestionStartTime] = useState(0);
   const [showLevelUp, setShowLevelUp] = useState(false);
   const [newLevel, setNewLevel] = useState(0);
-  const [revealedConcept, setRevealedConcept] = useState<number | null>(null);
+  const [hintRevealed, setHintRevealed] = useState(false);
+  const [hintUsed, setHintUsed] = useState(false);
 
   // Combo penalty state
   const [penaltyTimerActive, setPenaltyTimerActive] = useState(false);
@@ -106,27 +110,10 @@ export default function UnderstandScreen() {
   const frenzyAnim = useRef(new Animated.Value(0)).current;
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  if (!user) return <Redirect href="/login" />;
-
-  // Study timer
   useEffect(() => {
-    if (phase !== "study") return;
-    timerRef.current = setInterval(() => {
-      setStudyTimer((prev) => {
-        if (prev <= 1) {
-          if (timerRef.current) clearInterval(timerRef.current);
-          setPhase("play");
-          setGameStartTime(Date.now());
-          setQuestionStartTime(Date.now());
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [phase]);
+    setGameStartTime(Date.now());
+    setQuestionStartTime(Date.now());
+  }, []);
 
   // Question timer
   useEffect(() => {
@@ -147,13 +134,6 @@ export default function UnderstandScreen() {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [phase, currentQ]);
-
-  // Auto-hide revealed concept card
-  useEffect(() => {
-    if (revealedConcept === null) return;
-    const t = setTimeout(() => setRevealedConcept(null), 3000);
-    return () => clearTimeout(t);
-  }, [revealedConcept]);
 
   // Auto-hide hype text
   useEffect(() => {
@@ -189,10 +169,12 @@ export default function UnderstandScreen() {
     return () => clearTimeout(timeout);
   }, [penaltyTimerActive]);
 
+  if (!user) return <Redirect href="/login" />;
+
   if (questions.length === 0) {
     return (
-      <View style={s.container}>
-        <StatusBar style="dark" />
+      <View style={[s.container, { backgroundColor: colors.background }]}>
+        <StatusBar style={isDark ? "light" : "dark"} />
         <View style={s.center}>
           <Text style={s.bigEmoji}>🌰</Text>
           <Text style={s.errorText}>No concepts found for this plot.</Text>
@@ -240,6 +222,8 @@ export default function UnderstandScreen() {
   const advanceQuestion = () => {
     setSelectedAnswer(null);
     setCorrectAnswer(null);
+    setHintRevealed(false);
+    setHintUsed(false);
     if (currentQ + 1 >= questions.length) {
       if (timerRef.current) clearInterval(timerRef.current);
       finishGame();
@@ -253,7 +237,7 @@ export default function UnderstandScreen() {
     const avgCombo = comboCount > 0 ? comboSum / comboCount : 1;
     const finalAccuracy = calculateFinalAccuracy(baseAccuracy, avgCombo, 0);
 
-    if (materialId && !alreadyDone) {
+    if (materialId) {
       const prevLevel = Math.floor(state.totalXP / 200);
       const xp = completeStage(materialId, "understand", finalAccuracy, maxCombo, gameStartTime);
       setEarnedXP(xp);
@@ -264,12 +248,6 @@ export default function UnderstandScreen() {
       }
     }
     setPhase("complete");
-  };
-
-  const handleStudyTap = (idx: number) => {
-    if (phase !== "study") return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setRevealedConcept(idx);
   };
 
   const handleAnswerTap = (conceptId: string) => {
@@ -291,6 +269,17 @@ export default function UnderstandScreen() {
       const newConsec = consecutiveCorrect + 1;
       setConsecutiveCorrect(newConsec);
       setHypeText(getHypeText(newCombo, true));
+
+      const speedRatio = Math.max(
+        0,
+        (QUESTION_SECONDS * 1000 - responseTime) / (QUESTION_SECONDS * 1000)
+      );
+      const earnedPoints = Math.round(
+        (BASE_POINTS + SPEED_POINTS * speedRatio) *
+          getComboMultiplier(newCombo) *
+          (hintUsed ? HINT_PENALTY : 1)
+      );
+      setScore((prev) => prev + earnedPoints);
 
       // Golden seed roll (5% chance, 10% in frenzy)
       const isFrenzy = newCombo >= 5;
@@ -338,19 +327,13 @@ export default function UnderstandScreen() {
     }
   };
 
-  const handleSkipStudy = () => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    setGameStartTime(Date.now());
-    setQuestionStartTime(Date.now());
-    setPhase("play");
-  };
-
   const handleRetry = () => {
-    setPhase("study");
-    setStudyTimer(STUDY_SECONDS);
+    setPhase("play");
+    setQuestionTimer(QUESTION_SECONDS);
     setCurrentQ(0);
     setLives(MAX_LIVES);
     setCollected(0);
+    setScore(0);
     setCombo(0);
     setMaxCombo(0);
     setComboSum(0);
@@ -360,18 +343,48 @@ export default function UnderstandScreen() {
     setSelectedAnswer(null);
     setCorrectAnswer(null);
     setPenaltyTimerActive(false);
+    setHintRevealed(false);
+    setHintUsed(false);
   };
+
+  const currentQuestion = questions[currentQ];
+  const currentConcept = useMemo(
+    () => concepts.find((concept) => concept.id === currentQuestion?.conceptId),
+    [concepts, currentQuestion?.conceptId]
+  );
+  const hintText = useMemo(() => {
+    const explanation = currentConcept?.explanation?.trim();
+    if (!explanation) return "Think about the broader idea this fact supports.";
+    if (explanation.length <= 140) return explanation;
+    return `${explanation.slice(0, 140).trim()}…`;
+  }, [currentConcept?.explanation]);
+
+  const answerOptions = useMemo(() => {
+    if (!currentQuestion) return [];
+    const opts = [{ id: currentQuestion.conceptId, name: currentQuestion.conceptName }];
+    const distractors = conceptNames
+      .filter((c) => c.id !== currentQuestion.conceptId)
+      .sort(() => Math.random() - 0.5)
+      .slice(0, Math.min(3, conceptNames.length - 1));
+    opts.push(...distractors);
+    for (let i = opts.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [opts[i], opts[j]] = [opts[j], opts[i]];
+    }
+    return opts;
+  }, [conceptNames, currentQuestion?.conceptId]);
 
   // ─── GAME OVER ───
   if (phase === "gameover") {
     return (
-      <View style={s.container}>
-        <StatusBar style="dark" />
+      <View style={[s.container, { backgroundColor: colors.background }]}>
+        <StatusBar style={isDark ? "light" : "dark"} />
         <View style={s.center}>
           <Text style={s.bigEmoji}>🥀</Text>
           <Text style={s.title}>Greenhouse Wilted!</Text>
           <Text style={s.sub}>
-            Sorted {collected}/{questions.length} seeds{"\n"}You ran out of lives
+            Sorted {collected}/{questions.length} seeds{"\n"}Score: {score}{"\n"}You ran out
+            of lives
           </Text>
           <TouchableOpacity style={s.btn} onPress={handleRetry}>
             <Text style={s.btnText}>Try Again</Text>
@@ -391,8 +404,8 @@ export default function UnderstandScreen() {
   if (phase === "complete") {
     const pct = Math.round((collected / questions.length) * 100);
     return (
-      <View style={s.container}>
-        <StatusBar style="dark" />
+      <View style={[s.container, { backgroundColor: colors.background }]}>
+        <StatusBar style={isDark ? "light" : "dark"} />
         <LevelUpSplash
           visible={showLevelUp}
           newLevel={newLevel}
@@ -421,8 +434,8 @@ export default function UnderstandScreen() {
             </View>
           )}
           <Text style={s.sub}>
-            {collected}/{questions.length} concepts matched ({pct}%){"\n"}Best combo: x
-            {getComboMultiplier(maxCombo).toFixed(1)}
+            {collected}/{questions.length} concepts matched ({pct}%)
+            {"\n"}Score: {score}{"\n"}Best combo: x{getComboMultiplier(maxCombo).toFixed(1)}
           </Text>
           <TouchableOpacity
             style={s.btn}
@@ -435,41 +448,19 @@ export default function UnderstandScreen() {
     );
   }
 
-  // ─── STUDY & PLAY ───
-  const isStudy = phase === "study";
-  const timerValue = isStudy ? studyTimer : questionTimer;
+  // ─── PLAY ───
+  const timerValue = questionTimer;
   const timerColor = penaltyTimerActive
     ? "#FF6B6B"
     : timerValue <= 3
-    ? "#E57373"
-    : timerValue <= 6
-    ? "#FFB74D"
-    : "#7DB58D";
-
-  const currentQuestion = questions[currentQ];
-
-  // Build shuffled answer options for current question
-  const answerOptions = useMemo(() => {
-    if (!currentQuestion) return [];
-    // Always include the correct concept
-    const opts = [{ id: currentQuestion.conceptId, name: currentQuestion.conceptName }];
-    // Add other concepts as distractors
-    const distractors = conceptNames
-      .filter((c) => c.id !== currentQuestion.conceptId)
-      .sort(() => Math.random() - 0.5)
-      .slice(0, Math.min(3, conceptNames.length - 1));
-    opts.push(...distractors);
-    // Shuffle all options
-    for (let i = opts.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [opts[i], opts[j]] = [opts[j], opts[i]];
-    }
-    return opts;
-  }, [currentQ, currentQuestion?.conceptId]);
+      ? "#E57373"
+      : timerValue <= 6
+        ? "#FFB74D"
+        : "#7DB58D";
 
   return (
-    <View style={s.container}>
-      <StatusBar style="dark" />
+    <View style={[s.container, { backgroundColor: colors.background }]}>
+      <StatusBar style={isDark ? "light" : "dark"} />
 
       {/* Curiosity hook modal */}
       <Modal transparent visible={!!hookText} animationType="fade">
@@ -501,31 +492,34 @@ export default function UnderstandScreen() {
         <TouchableOpacity onPress={() => router.back()} activeOpacity={0.6}>
           <Text style={s.back}>← Back</Text>
         </TouchableOpacity>
-        <Text style={s.tag}>Stage 2 · The Greenhouse</Text>
+        <Text style={s.tag}>Stage 1 · Kahoot Quiz</Text>
       </View>
 
-      {/* Phase banner */}
-      <View style={[s.banner, isStudy ? s.bannerStudy : s.bannerChallenge]}>
-        {isStudy ? (
-          <View style={s.bannerRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={s.bannerTitle}>Study Phase</Text>
-              <Text style={s.bannerDesc}>
-                Tap concepts to see which facts belong to each. Memorize the connections!
-              </Text>
-            </View>
-            <TouchableOpacity onPress={handleSkipStudy} style={s.readyBtn}>
-              <Text style={s.readyBtnText}>I'm Ready →</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <>
-            <Text style={s.bannerTitle}>Which concept does this fact belong to?</Text>
-            <View style={s.defBox}>
-              <Text style={s.defText}>{currentQuestion?.factTerm}</Text>
-            </View>
-          </>
-        )}
+      {/* Question banner */}
+      <View style={[s.banner, s.bannerChallenge, { backgroundColor: colors.card }]}
+      >
+        <Text style={s.bannerTitle}>Which concept does this fact belong to?</Text>
+        <Text style={s.bannerDesc}>Answer fast for more points. Use a hint if needed.</Text>
+        <View style={[s.defBox, { backgroundColor: colors.card, borderColor: colors.border }]}
+        >
+          <Text style={s.defText}>{currentQuestion?.factTerm}</Text>
+        </View>
+        <View style={s.hintRow}>
+          <TouchableOpacity
+            onPress={() => {
+              if (!hintRevealed) {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setHintRevealed(true);
+                setHintUsed(true);
+              }
+            }}
+            style={[s.hintBtn, hintRevealed && s.hintBtnUsed]}
+            activeOpacity={0.7}
+          >
+            <Text style={s.hintBtnText}>{hintRevealed ? "Hint Used" : "Show Hint"}</Text>
+          </TouchableOpacity>
+          {hintRevealed && <Text style={s.hintText}>{hintText}</Text>}
+        </View>
       </View>
 
       {/* Stats bar */}
@@ -534,14 +528,9 @@ export default function UnderstandScreen() {
           {timerValue}s
           {penaltyTimerActive && <Text style={{ fontSize: 10 }}> -5s</Text>}
         </Animated.Text>
-        {!isStudy && (
-          <Text style={s.seedCount}>
-            🌿 {collected}/{questions.length}
-          </Text>
-        )}
-        {!isStudy && combo >= 2 && (
-          <Text style={s.comboText}>x{getComboMultiplier(combo).toFixed(1)}</Text>
-        )}
+        <Text style={s.seedCount}>🌿 {collected}/{questions.length}</Text>
+        <Text style={s.scoreText}>Score {score}</Text>
+        {combo >= 2 && <Text style={s.comboText}>Streak x{combo}</Text>}
         <Text style={s.lives}>
           {"❤️".repeat(lives)}
           {"🖤".repeat(MAX_LIVES - lives)}
@@ -562,84 +551,40 @@ export default function UnderstandScreen() {
         </Animated.View>
       )}
 
-      {/* Content */}
-      <ScrollView showsVerticalScrollIndicator={false} style={s.scroll}>
-        {isStudy ? (
-          // STUDY PHASE: Show concept cards to tap and explore
-          <Animated.View style={[s.grid, { transform: [{ translateX: shakeAnim }] }]}>
-            {concepts.map((concept, idx) => {
-              const isRevealed = revealedConcept === idx;
-              const linkedFacts = concept.fact_ids
-                .map((fid) => facts.find((f) => f.id === fid))
-                .filter(Boolean);
+      {/* Answers */}
+      <Animated.View style={[s.answersGrid, { transform: [{ translateX: shakeAnim }] }]}>
+        {answerOptions.map((option, index) => {
+          const isWrong = selectedAnswer === option.id && option.id !== currentQuestion.conceptId;
+          const isCorrectChoice = correctAnswer === option.id;
+          const color = ANSWER_COLORS[index % ANSWER_COLORS.length];
 
-              return (
-                <TouchableOpacity
-                  key={concept.id}
-                  style={[s.conceptCard, isRevealed && s.conceptCardRevealed]}
-                  onPress={() => handleStudyTap(idx)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[s.conceptCardTitle, isRevealed && s.conceptCardTitleRevealed]}>
-                    {concept.name}
-                  </Text>
-                  {isRevealed && (
-                    <View style={s.conceptCardDetails}>
-                      <Text style={s.conceptExplanation}>{concept.explanation}</Text>
-                      <View style={s.factsList}>
-                        {linkedFacts.map((fact) => (
-                          <Text key={fact!.id} style={s.factItem}>
-                            • {fact!.term}
-                          </Text>
-                        ))}
-                      </View>
-                    </View>
-                  )}
-                  {!isRevealed && (
-                    <Text style={s.conceptCardHint}>
-                      {concept.fact_ids.length} fact{concept.fact_ids.length !== 1 ? "s" : ""} — tap
-                      to explore
-                    </Text>
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-          </Animated.View>
-        ) : (
-          // PLAY PHASE: Match fact to concept
-          <Animated.View style={[s.answersGrid, { transform: [{ translateX: shakeAnim }] }]}>
-            {answerOptions.map((option) => {
-              const isWrong = selectedAnswer === option.id && option.id !== currentQuestion.conceptId;
-              const isCorrectChoice = correctAnswer === option.id;
-
-              return (
-                <TouchableOpacity
-                  key={option.id}
-                  style={[
-                    s.answerCard,
-                    isCorrectChoice && s.answerCardCorrect,
-                    isWrong && s.answerCardWrong,
-                  ]}
-                  onPress={() => handleAnswerTap(option.id)}
-                  activeOpacity={0.7}
-                  disabled={selectedAnswer !== null || correctAnswer !== null}
-                >
-                  <Text
-                    style={[
-                      s.answerCardText,
-                      isCorrectChoice && s.answerCardTextCorrect,
-                      isWrong && s.answerCardTextWrong,
-                    ]}
-                  >
-                    {option.name}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </Animated.View>
-        )}
-        <View style={{ height: 20 }} />
-      </ScrollView>
+          return (
+            <TouchableOpacity
+              key={option.id}
+              style={[
+                s.answerCard,
+                { backgroundColor: color.background, borderColor: color.border },
+                isCorrectChoice && s.answerCardCorrect,
+                isWrong && s.answerCardWrong,
+              ]}
+              onPress={() => handleAnswerTap(option.id)}
+              activeOpacity={0.7}
+              disabled={selectedAnswer !== null || correctAnswer !== null}
+            >
+              <Text
+                style={[
+                  s.answerCardText,
+                  { color: color.text },
+                  isCorrectChoice && s.answerCardTextCorrect,
+                  isWrong && s.answerCardTextWrong,
+                ]}
+              >
+                {option.name}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </Animated.View>
     </View>
   );
 }
@@ -647,7 +592,6 @@ export default function UnderstandScreen() {
 const s = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#FFF8F0",
     paddingHorizontal: 20,
     paddingTop: 56,
     paddingBottom: 20,
@@ -727,21 +671,23 @@ const s = StyleSheet.create({
     letterSpacing: 1,
   },
   banner: { borderRadius: 16, padding: 14, marginBottom: 10 },
-  bannerStudy: { backgroundColor: "#E8F5E9" },
-  bannerChallenge: { backgroundColor: "#FFF3E0" },
-  bannerRow: { flexDirection: "row", alignItems: "center" },
+  bannerChallenge: { },
   bannerTitle: { fontSize: 15, fontWeight: "700", color: "#4A4A4A", marginBottom: 4 },
-  bannerDesc: { fontSize: 12, color: "#7DB58D" },
-  readyBtn: {
+  bannerDesc: { fontSize: 12, color: "#7DB58D", marginBottom: 6 },
+  defBox: { borderRadius: 12, padding: 12, marginTop: 6, borderWidth: 1 },
+  defText: { fontSize: 14, color: "#4A4A4A", lineHeight: 20 },
+  hintRow: { marginTop: 10 },
+  hintBtn: {
+    alignSelf: "flex-start",
     backgroundColor: "#7DB58D",
     borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    marginLeft: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginBottom: 6,
   },
-  readyBtnText: { color: "#FFF", fontSize: 13, fontWeight: "700" },
-  defBox: { backgroundColor: "#FFF", borderRadius: 12, padding: 12, marginTop: 6 },
-  defText: { fontSize: 14, color: "#4A4A4A", lineHeight: 20 },
+  hintBtnUsed: { backgroundColor: "#B7CDBF" },
+  hintBtnText: { color: "#FFF", fontSize: 12, fontWeight: "700" },
+  hintText: { fontSize: 12, color: "#5D4037", lineHeight: 18 },
   stats: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -750,7 +696,8 @@ const s = StyleSheet.create({
   },
   timer: { fontSize: 22, fontWeight: "800" },
   seedCount: { fontSize: 14, fontWeight: "600", color: "#4A4A4A" },
-  comboText: { fontSize: 16, fontWeight: "800", color: "#FF9800" },
+  comboText: { fontSize: 14, fontWeight: "800", color: "#FF9800" },
+  scoreText: { fontSize: 13, fontWeight: "700", color: "#4A4A4A" },
   lives: { fontSize: 16 },
   hype: { textAlign: "center", fontWeight: "800", fontSize: 18, marginBottom: 4 },
   goldenOverlay: {
@@ -785,66 +732,15 @@ const s = StyleSheet.create({
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 4,
   },
-  scroll: { flex: 1 },
-
-  // Study phase: concept cards
-  grid: { gap: 10, paddingBottom: 16 },
-  conceptCard: {
-    backgroundColor: "#FFF",
-    borderWidth: 1.5,
-    borderColor: "#E0E0E0",
-    borderRadius: 14,
-    padding: 16,
-    minHeight: 64,
-  },
-  conceptCardRevealed: {
-    backgroundColor: "#F0FAF3",
-    borderColor: "#7DB58D",
-  },
-  conceptCardTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#4A4A4A",
-  },
-  conceptCardTitleRevealed: {
-    color: "#2E7D32",
-  },
-  conceptCardHint: {
-    fontSize: 12,
-    color: "#9E9E9E",
-    marginTop: 4,
-  },
-  conceptCardDetails: {
-    marginTop: 10,
-  },
-  conceptExplanation: {
-    fontSize: 13,
-    color: "#7DB58D",
-    lineHeight: 18,
-    marginBottom: 8,
-  },
-  factsList: {
-    backgroundColor: "#E8F5E9",
-    borderRadius: 8,
-    padding: 10,
-  },
-  factItem: {
-    fontSize: 12,
-    color: "#2E7D32",
-    lineHeight: 18,
-    fontWeight: "600",
-  },
-
-  // Play phase: answer cards
-  answersGrid: { gap: 10, paddingBottom: 16 },
+  // Answer cards
+  answersGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10, paddingBottom: 16 },
   answerCard: {
-    backgroundColor: "#FFF",
     borderWidth: 2,
-    borderColor: "#E0E0E0",
     borderRadius: 14,
     padding: 18,
     alignItems: "center",
     justifyContent: "center",
+    width: "48%",
     minHeight: 64,
   },
   answerCardCorrect: {

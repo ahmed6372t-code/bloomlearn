@@ -12,6 +12,7 @@ import { StatusBar } from "expo-status-bar";
 import { Redirect, useRouter, useLocalSearchParams } from "expo-router";
 import { useAuth } from "../../context/AuthContext";
 import { useProgress } from "../../context/ProgressContext";
+import { useTheme } from "../../context/ThemeContext";
 import {
   updateCombo,
   getComboMultiplier,
@@ -25,7 +26,7 @@ import {
 } from "../../lib/engagement";
 import LevelUpSplash from "./LevelUpSplash";
 
-const MAX_LIVES = 3;
+const MAX_LIVES = 5;
 
 type Phase = "play" | "complete" | "gameover";
 type ProcedureState = "playing" | "complete" | "potted";
@@ -33,12 +34,16 @@ type ProcedureState = "playing" | "complete" | "potted";
 export default function ApplyScreen() {
   const { user } = useAuth();
   const router = useRouter();
-  const { materialId } = useLocalSearchParams<{ materialId: string }>();
-  const { state, completeStage } = useProgress();
+  const { materialId, watering } = useLocalSearchParams<{ materialId: string; watering?: string }>();
+  const { state, completeStage, addToCompost } = useProgress();
+  const { isDark, colors } = useTheme();
 
   const material = materialId ? state.materials[materialId] : undefined;
   const alreadyDone = material?.stagesCompleted?.includes("apply") ?? false;
-  const procedures = material?.matrix?.procedures ?? [];
+  const procedures = useMemo(() => {
+    const all = material?.matrix?.procedures ?? [];
+    return watering === "true" && all.length > 0 ? [all[0]] : all;
+  }, [material, watering]);
 
   const [phase, setPhase] = useState<Phase>("play");
   const [currentProcIdx, setCurrentProcIdx] = useState(0);
@@ -76,8 +81,8 @@ export default function ApplyScreen() {
   if (!user) return <Redirect href="/login" />;
   if (!procedures || procedures.length === 0) {
     return (
-      <View style={s.container}>
-        <StatusBar style="dark" />
+      <View style={[s.container, { backgroundColor: colors.background }]}>
+        <StatusBar style={isDark ? "light" : "dark"} />
         <View style={s.center}>
           <Text style={s.bigEmoji}>🚨</Text>
           <Text style={s.errorText}>No procedures found for this plot.</Text>
@@ -187,6 +192,19 @@ export default function ApplyScreen() {
       // WRONG
       triggerHaptic("error");
       doShake();
+
+      // Add to Compost Bin
+      if (materialId) {
+        const expectedStep = currentProc.steps[nextStepIdx];
+        addToCompost({
+          id: `${currentProc.name}-${nextStepIdx}`,
+          materialId,
+          question: `What is step ${nextStepIdx + 1} of ${currentProc.name}?`,
+          answer: expectedStep,
+          type: "procedure",
+        });
+      }
+
       setCombo(0);
       setConsecutiveCorrect(0);
       setHypeText(getHypeText(0, false));
@@ -207,7 +225,7 @@ export default function ApplyScreen() {
       const avgCombo = comboCount > 0 ? comboSum / comboCount : 1;
       const finalAccuracy = calculateFinalAccuracy(baseAccuracy, avgCombo, 0);
 
-      if (materialId && !alreadyDone) {
+      if (materialId) {
         const prevLevel = Math.floor(state.totalXP / 200);
         const xp = completeStage(materialId, "apply", finalAccuracy, maxCombo, gameStartTime);
         setEarnedXP(xp);
@@ -244,8 +262,8 @@ export default function ApplyScreen() {
   // ─── GAME OVER ───
   if (phase === "gameover") {
     return (
-      <View style={s.container}>
-        <StatusBar style="dark" />
+      <View style={[s.container, { backgroundColor: colors.background }]}>
+        <StatusBar style={isDark ? "light" : "dark"} />
         <View style={s.center}>
           <Text style={s.bigEmoji}>💀</Text>
           <Text style={s.title}>Garden Withered</Text>
@@ -269,8 +287,8 @@ export default function ApplyScreen() {
   // ─── COMPLETE ───
   if (phase === "complete") {
     return (
-      <View style={s.container}>
-        <StatusBar style="dark" />
+      <View style={[s.container, { backgroundColor: colors.background }]}>
+        <StatusBar style={isDark ? "light" : "dark"} />
         <LevelUpSplash
           visible={showLevelUp}
           newLevel={newLevel}
@@ -315,8 +333,8 @@ export default function ApplyScreen() {
   // ─── POTTED CELEBRATION & RETENTION TRICK ───
   if (procState === "potted") {
     return (
-      <View style={s.container}>
-        <StatusBar style="dark" />
+      <View style={[s.container, { backgroundColor: colors.background }]}>
+        <StatusBar style={isDark ? "light" : "dark"} />
 
         {/* Retention trick modal */}
         <Modal transparent visible={!!retentionTrick} animationType="fade">
@@ -325,7 +343,8 @@ export default function ApplyScreen() {
             activeOpacity={1}
             onPress={handleNextProcedure}
           >
-            <View style={s.hookCard}>
+            <View style={[s.hookCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+            >
               <Text style={s.hookEmoji}>💡</Text>
               <Text style={s.hookTitle}>Retention Trick</Text>
               <Text style={s.hookBody}>{retentionTrick}</Text>
@@ -355,8 +374,8 @@ export default function ApplyScreen() {
 
   // ─── PLAY ───
   return (
-    <View style={s.container}>
-      <StatusBar style="dark" />
+    <View style={[s.container, { backgroundColor: colors.background }]}>
+      <StatusBar style={isDark ? "light" : "dark"} />
 
       {/* Frenzy overlay */}
       {combo >= 5 && (
@@ -371,7 +390,8 @@ export default function ApplyScreen() {
       {/* Curiosity hook modal */}
       <Modal transparent visible={!!hookText} animationType="fade">
         <TouchableOpacity style={s.hookOverlay} activeOpacity={1} onPress={() => setHookText(null)}>
-          <View style={s.hookCard}>
+          <View style={[s.hookCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+          >
             <Text style={s.hookEmoji}>🧠</Text>
             <Text style={s.hookTitle}>Learning Insight</Text>
             <Text style={s.hookBody}>{hookText}</Text>
@@ -431,7 +451,8 @@ export default function ApplyScreen() {
           <Text style={s.sequenceLabel}>Sequence:</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {currentSequence.map((idx, pos) => (
-              <View key={pos} style={s.sequenceStep}>
+              <View key={pos} style={[s.sequenceStep, { backgroundColor: colors.card, borderColor: colors.border }]}
+              >
                 <Text style={s.sequenceStepText}>{pos + 1}. </Text>
                 <Text style={s.sequenceStepText} numberOfLines={2}>
                   {currentProc.steps[idx]}
@@ -450,7 +471,11 @@ export default function ApplyScreen() {
             return (
               <TouchableOpacity
                 key={`step-${item.idx}`}
-                style={[s.stepCard, isUsed && s.stepCardUsed]}
+                style={[
+                  s.stepCard,
+                  { backgroundColor: colors.card, borderColor: colors.border },
+                  isUsed && [s.stepCardUsed, { backgroundColor: colors.accentSoft, borderColor: colors.accent }],
+                ]}
                 onPress={() => handleStepTap(displayIdx, Date.now())}
                 disabled={isUsed}
                 activeOpacity={0.7}
@@ -469,7 +494,7 @@ export default function ApplyScreen() {
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#FFF8F0", paddingHorizontal: 20, paddingTop: 56, paddingBottom: 20 },
+  container: { flex: 1, paddingHorizontal: 20, paddingTop: 56, paddingBottom: 20 },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
   bigEmoji: { fontSize: 64, marginBottom: 12 },
   title: { fontSize: 26, fontWeight: "700", color: "#4A4A4A", marginBottom: 8 },
@@ -502,16 +527,16 @@ const s = StyleSheet.create({
   goldenText: { fontSize: 28, fontWeight: "900", color: "#FFD700", textShadowColor: "rgba(0,0,0,0.3)", textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 4 },
   sequenceBox: { backgroundColor: "#E8F5E9", borderRadius: 12, padding: 10, marginBottom: 10 },
   sequenceLabel: { fontSize: 11, fontWeight: "700", color: "#7DB58D", marginBottom: 6 },
-  sequenceStep: { backgroundColor: "#FFF", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, marginRight: 8, borderWidth: 1, borderColor: "#7DB58D", minWidth: 120 },
+  sequenceStep: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, marginRight: 8, borderWidth: 1, minWidth: 120 },
   sequenceStepText: { fontSize: 11, fontWeight: "600", color: "#2E7D32", lineHeight: 14 },
   scroll: { flex: 1 },
   stepsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  stepCard: { width: "47%", backgroundColor: "#FFF", borderRadius: 14, padding: 12, minHeight: 80, justifyContent: "center", alignItems: "center", borderWidth: 1.5, borderColor: "#E0E0E0" },
-  stepCardUsed: { backgroundColor: "#E8F5E9", borderColor: "#7DB58D", opacity: 0.5 },
+  stepCard: { width: "47%", borderRadius: 14, padding: 12, minHeight: 80, justifyContent: "center", alignItems: "center", borderWidth: 1.5 },
+  stepCardUsed: { opacity: 0.5 },
   stepCardText: { fontSize: 13, fontWeight: "600", color: "#4A4A4A", textAlign: "center" },
   stepCardTextUsed: { color: "#9E9E9E" },
   hookOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
-  hookCard: { backgroundColor: "#FFF8F0", borderRadius: 20, padding: 28, width: "85%", alignItems: "center", borderWidth: 2, borderColor: "#7DB58D" },
+  hookCard: { borderRadius: 20, padding: 28, width: "85%", alignItems: "center", borderWidth: 2 },
   hookEmoji: { fontSize: 48, marginBottom: 8 },
   hookTitle: { fontSize: 18, fontWeight: "700", color: "#7DB58D", marginBottom: 8 },
   hookBody: { fontSize: 15, color: "#4A4A4A", textAlign: "center", lineHeight: 22, marginBottom: 12 },

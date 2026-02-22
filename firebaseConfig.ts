@@ -4,6 +4,7 @@ import { initializeAuth, getAuth } from "firebase/auth";
 import { getReactNativePersistence } from "@firebase/auth";
 import { initializeFirestore, getFirestore } from "firebase/firestore";
 import { getFunctions } from "firebase/functions";
+import { getStorage } from "firebase/storage";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export const firebaseConfig = {
@@ -39,16 +40,22 @@ try {
 }
 export const auth = authInstance;
 
-// Initialize Firestore with long polling for React Native
+// Initialize Firestore with long polling for React Native.
+// IMPORTANT: initializeFirestore (with long polling) must be the *primary* call.
+// getFirestore() is only the fallback for "already initialized" errors (e.g. hot reload).
 let dbInstance;
 try {
-  dbInstance = getFirestore(app);
-} catch {
   dbInstance = initializeFirestore(app, {
     experimentalForceLongPolling: true,
   });
+} catch {
+  // App already initialized (e.g. fast refresh) — retrieve the existing instance
+  dbInstance = getFirestore(app);
 }
 export const db = dbInstance;
 
 // Initialize Cloud Functions
 export const functions = getFunctions(app);
+
+// Initialize Firebase Storage
+export const storage = getStorage(app);

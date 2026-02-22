@@ -7,7 +7,6 @@ node_modules/
 .expo/
 dist/
 web-build/
-expo-env.d.ts
 
 # Native
 .kotlin/
@@ -40,6 +39,19 @@ functions/.env.*
 # typescript
 *.tsbuildinfo
 
+# Firebase build artifacts & debug logs
+functions/lib/
+firebase-debug.log
+*-debug.log
+
+# VS Code workspace files
+*.code-workspace
+
 # generated native folders
 /ios
 /android
+
+# Markdown files (except CLAUDE.md context file)
+*.md
+!CLAUDE.md
+!README.md

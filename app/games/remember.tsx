@@ -14,6 +14,7 @@ import { Redirect, useRouter, useLocalSearchParams } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { useAuth } from "../../context/AuthContext";
 import { useProgress } from "../../context/ProgressContext";
+import { useTheme } from "../../context/ThemeContext";
 import {
   updateCombo,
   getComboMultiplier,
@@ -24,13 +25,15 @@ import {
   triggerHaptic,
   calculateFastFinishBonus,
   calculateFinalAccuracy,
+  shouldSpawnPest,
 } from "../../lib/engagement";
+import { SwattablePest } from "../../lib/SwattablePest";
 import LevelUpSplash from "./LevelUpSplash";
 import { ParticleSystem, generateExplosionParticles, type Particle } from "../../lib/ParticleSystem";
 
 const STUDY_SECONDS = 20;
 const QUESTION_SECONDS = 10;
-const MAX_LIVES = 3;
+const MAX_LIVES = 5;
 const NUM_QUESTIONS = 10;
 const FAST_FINISH_TARGET = 60;
 
@@ -39,8 +42,9 @@ type Phase = "study" | "challenge" | "complete" | "gameover";
 export default function RememberScreen() {
   const { user } = useAuth();
   const router = useRouter();
-  const { materialId } = useLocalSearchParams<{ materialId: string }>();
-  const { state, completeStage } = useProgress();
+  const { materialId, watering } = useLocalSearchParams<{ materialId: string; watering?: string }>();
+  const { state, completeStage, addToCompost, updateHighestCombo, incrementPestsSwatted } = useProgress();
+  const { isDark, colors } = useTheme();
 
   const material = materialId ? state.materials[materialId] : undefined;
   const alreadyDone = material?.stagesCompleted?.includes("remember") ?? false;
@@ -48,16 +52,18 @@ export default function RememberScreen() {
 
   const challengeFacts = useMemo(() => {
     const shuffled = [...facts].sort(() => Math.random() - 0.5);
-    return shuffled.slice(0, Math.min(NUM_QUESTIONS, shuffled.length));
-  }, [facts]);
+    const numQ = watering === "true" ? Math.max(3, Math.floor(NUM_QUESTIONS / 2)) : NUM_QUESTIONS;
+    return shuffled.slice(0, Math.min(numQ, shuffled.length));
+  }, [facts, watering]);
 
-  const [phase, setPhase] = useState<Phase>("study");
+  const [phase, setPhase] = useState<Phase>("challenge");
   const [studyTimer, setStudyTimer] = useState(STUDY_SECONDS);
   const [questionTimer, setQuestionTimer] = useState(QUESTION_SECONDS);
   const [currentQ, setCurrentQ] = useState(0);
   const [lives, setLives] = useState(MAX_LIVES);
   const [collected, setCollected] = useState(0);
   const [revealedCard, setRevealedCard] = useState<number | null>(null);
+  const [hintRevealed, setHintRevealed] = useState(false);
   const [earnedXP, setEarnedXP] = useState(0);
   const [wrongCard, setWrongCard] = useState<number | null>(null);
   const [correctCard, setCorrectCard] = useState<number | null>(null);
@@ -69,12 +75,37 @@ export default function RememberScreen() {
   const [hypeText, setHypeText] = useState<{ text: string; color: string } | null>(null);
   const [hookText, setHookText] = useState<string | null>(null);
   const [goldenFlash, setGoldenFlash] = useState(false);
+  const [pestActive, setPestActive] = useState(false);
   const [consecutiveCorrect, setConsecutiveCorrect] = useState(0);
   const [challengeStartTime, setChallengeStartTime] = useState(0);
   const [questionStartTime, setQuestionStartTime] = useState(0);
   const [showLevelUp, setShowLevelUp] = useState(false);
   const [newLevel, setNewLevel] = useState(0);
   const [particles, setParticles] = useState<Particle[]>([]);
+  const answerOptions = useMemo(() => {
+    const currentFact = challengeFacts[currentQ];
+    if (!currentFact) return [];
+    const wrongFacts = facts.filter((f) => f.id !== currentFact.id);
+    const shuffled = [...wrongFacts].sort(() => Math.random() - 0.5).slice(0, 3);
+    const options = [currentFact, ...shuffled];
+    while (options.length < 4) {
+      options.push({
+        id: `dummy_${Math.random().toString(36).slice(2)}`,
+        term: "Decoy",
+        definition: "",
+      } as (typeof currentFact));
+    }
+    return options.sort(() => Math.random() - 0.5);
+  }, [challengeFacts, currentQ, facts]);
+
+  const hintText = useMemo(() => {
+    const currentFact = challengeFacts[currentQ];
+    if (!currentFact?.term) return "Think about the key term that fits this definition.";
+    const trimmed = currentFact.term.trim();
+    const firstLetter = trimmed.charAt(0).toUpperCase();
+    const length = trimmed.replace(/\s+/g, " ").length;
+    return `Starts with "${firstLetter}" - ${length} characters`;
+  }, [challengeFacts, currentQ]);
 
   // Combo penalty state
   const [penaltyTimerActive, setPenaltyTimerActive] = useState(false);
@@ -189,7 +220,8 @@ export default function RememberScreen() {
 
   if (facts.length === 0) {
     return (
-      <View style={s.container}><StatusBar style="dark" />
+      <View style={[s.container, { backgroundColor: colors.background }]}>
+        <StatusBar style={isDark ? "light" : "dark"} />
         <View style={s.center}>
           <Text style={s.bigEmoji}>🌰</Text>
           <Text style={s.errorText}>No seeds found for this plot.</Text>
@@ -224,6 +256,7 @@ export default function RememberScreen() {
   const handleTimeout = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     doShake("heavy");
+    setPestActive(false);
     setCombo(0);
     setConsecutiveCorrect(0);
     setHypeText(getHypeText(0, false));
@@ -232,19 +265,39 @@ export default function RememberScreen() {
     if (newLives <= 0) {
       setPhase("gameover");
     } else {
-      advanceQuestion();
+      advanceQuestion(false);
     }
   };
 
-  const advanceQuestion = () => {
+  const advanceQuestion = (spawnPest: boolean = false) => {
     setWrongCard(null);
     setCorrectCard(null);
+    setHintRevealed(false);
     if (currentQ + 1 >= challengeFacts.length) {
       if (timerRef.current) clearInterval(timerRef.current);
       finishGame();
     } else {
       setCurrentQ((prev) => prev + 1);
+      if (spawnPest) {
+        setPestActive(true);
+      }
     }
+  };
+
+  const handlePestMiss = () => {
+    setPestActive(false);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    doShake("light");
+    setQuestionTimer((prev) => Math.min(prev, 3));
+    setHypeText({ text: "PEST ATTACK! Time slashed!", color: "#FF6B6B" });
+  };
+
+  const handlePestSwat = () => {
+    setPestActive(false);
+    const newCombo = Math.min(combo + 1, 5);
+    setCombo(newCombo);
+    setHypeText({ text: "SWATTED! +Combo", color: "#81C784" });
+    incrementPestsSwatted();
   };
 
   const finishGame = () => {
@@ -254,10 +307,12 @@ export default function RememberScreen() {
     const fastBonus = calculateFastFinishBonus(elapsed, FAST_FINISH_TARGET);
     const finalAccuracy = calculateFinalAccuracy(baseAccuracy, avgCombo, fastBonus);
 
-    if (materialId && !alreadyDone) {
+    if (materialId) {
       const prevLevel = Math.floor(state.totalXP / 200);
-      const xp = completeStage(materialId, "remember", finalAccuracy, maxCombo, challengeStartTime);
+      const streakCombo = Math.max(maxCombo, consecutiveCorrect);
+      const xp = completeStage(materialId, "remember", finalAccuracy, streakCombo, challengeStartTime);
       setEarnedXP(xp);
+      updateHighestCombo(streakCombo);
       const nextLevel = Math.floor((state.totalXP + xp) / 200);
       if (nextLevel > prevLevel) {
         setNewLevel(nextLevel);
@@ -277,7 +332,8 @@ export default function RememberScreen() {
     if (phase !== "challenge" || wrongCard !== null || correctCard !== null) return;
     const responseTime = Date.now() - questionStartTime;
     const currentFact = challengeFacts[currentQ];
-    const tappedFact = facts[idx];
+    const tappedFact = answerOptions[idx];
+    if (!tappedFact) return;
 
     if (tappedFact.id === currentFact.id) {
       // CORRECT - Heavy haptic impact + particle explosion
@@ -329,14 +385,26 @@ export default function RememberScreen() {
       }
 
       if (timerRef.current) clearInterval(timerRef.current);
-      setTimeout(() => advanceQuestion(), 500);
+      const spawnPest = shouldSpawnPest(newCombo);
+      setTimeout(() => advanceQuestion(spawnPest), 500);
     } else {
       // WRONG - Heavy shake + error haptic
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
       doShake("heavy");
       setWrongCard(idx);
-      const correctIdx = facts.findIndex((f) => f.id === currentFact.id);
+      const correctIdx = answerOptions.findIndex((f) => f.id === currentFact.id);
       setCorrectCard(correctIdx);
+
+      // Add to Compost Bin
+      if (materialId) {
+        addToCompost({
+          id: currentFact.id,
+          materialId,
+          question: currentFact.definition,
+          answer: currentFact.term,
+          type: "fact",
+        });
+      }
 
       // COMBO PENALTY: If combo >= 4, subtract 5 seconds from timer
       if (combo >= 4) {
@@ -355,10 +423,7 @@ export default function RememberScreen() {
         if (newLives <= 0) {
           setPhase("gameover");
         } else {
-          setWrongCard(null);
-          setCorrectCard(null);
-          if (currentQ + 1 >= challengeFacts.length) finishGame();
-          else setCurrentQ((prev) => prev + 1);
+          advanceQuestion(false);
         }
       }, 1000);
     }
@@ -372,8 +437,8 @@ export default function RememberScreen() {
   };
 
   const handleRetry = () => {
-    setPhase("study");
-    setStudyTimer(STUDY_SECONDS);
+    setPhase("challenge");
+    setQuestionTimer(QUESTION_SECONDS);
     setCurrentQ(0);
     setLives(MAX_LIVES);
     setCollected(0);
@@ -384,12 +449,14 @@ export default function RememberScreen() {
     setConsecutiveCorrect(0);
     setWrongCard(null);
     setCorrectCard(null);
+    setHintRevealed(false);
   };
 
   // ─── GAME OVER ───
   if (phase === "gameover") {
     return (
-      <View style={s.container}><StatusBar style="dark" />
+      <View style={[s.container, { backgroundColor: colors.background }]}>
+        <StatusBar style={isDark ? "light" : "dark"} />
         <View style={s.center}>
           <Text style={s.bigEmoji}>🥀</Text>
           <Text style={s.title}>Seeds Lost!</Text>
@@ -407,7 +474,8 @@ export default function RememberScreen() {
   if (phase === "complete") {
     const pct = Math.round((collected / challengeFacts.length) * 100);
     return (
-      <View style={s.container}><StatusBar style="dark" />
+      <View style={[s.container, { backgroundColor: colors.background }]}>
+        <StatusBar style={isDark ? "light" : "dark"} />
         <LevelUpSplash visible={showLevelUp} newLevel={newLevel} statName="+1 Memory" onDismiss={() => setShowLevelUp(false)} />
         <View style={s.center}>
           <Text style={s.bigEmoji}>📚</Text>
@@ -439,13 +507,18 @@ export default function RememberScreen() {
     : timerValue <= 3 ? "#E57373" : timerValue <= 6 ? "#FFB74D" : "#7DB58D";
 
   return (
-    <View style={s.container}>
-      <StatusBar style="dark" />
+    <View style={[s.container, { backgroundColor: colors.background }]}>
+      <StatusBar style={isDark ? "light" : "dark"} />
+
+      {pestActive && (
+        <SwattablePest onSwat={handlePestSwat} onMiss={handlePestMiss} />
+      )}
 
       {/* Curiosity hook modal */}
       <Modal transparent visible={!!hookText} animationType="fade">
         <TouchableOpacity style={s.hookOverlay} activeOpacity={1} onPress={() => setHookText(null)}>
-          <View style={s.hookCard}>
+          <View style={[s.hookCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+          >
             <Text style={s.hookEmoji}>🧠</Text>
             <Text style={s.hookTitle}>Memory Anchor</Text>
             <Text style={s.hookBody}>{hookText}</Text>
@@ -471,11 +544,11 @@ export default function RememberScreen() {
         <TouchableOpacity onPress={() => router.back()} activeOpacity={0.6}>
           <Text style={s.back}>← Back</Text>
         </TouchableOpacity>
-        <Text style={s.tag}>Stage 1 · The Seed Library</Text>
+        <Text style={s.tag}>Stage 1 · Kahoot Quiz</Text>
       </View>
 
       {/* Phase banner */}
-      <View style={[s.banner, isStudy ? s.bannerStudy : s.bannerChallenge]}>
+      <View style={[s.banner, isStudy ? s.bannerStudy : s.bannerChallenge, { backgroundColor: colors.card }]}>
         {isStudy ? (
           <View style={s.bannerRow}>
             <View style={{ flex: 1 }}>
@@ -488,9 +561,20 @@ export default function RememberScreen() {
           </View>
         ) : (
           <>
-            <Text style={s.bannerTitle}>Which seed matches this?</Text>
-            <View style={s.defBox}>
+            <Text style={s.bannerTitle}>Pick the correct term</Text>
+            <View style={[s.defBox, { backgroundColor: colors.card, borderColor: colors.border }]}
+            >
               <Text style={s.defText}>{challengeFacts[currentQ]?.definition}</Text>
+            </View>
+            <View style={s.hintRow}>
+              <TouchableOpacity
+                onPress={() => setHintRevealed(true)}
+                style={[s.hintBtn, { backgroundColor: colors.accent }, hintRevealed && { backgroundColor: colors.accentSoft }]}
+                activeOpacity={0.7}
+              >
+                <Text style={s.hintBtnText}>{hintRevealed ? "Hint Used" : "Show Hint"}</Text>
+              </TouchableOpacity>
+              {hintRevealed && <Text style={[s.hintText, { color: colors.muted }]}>{hintText}</Text>}
             </View>
           </>
         )}
@@ -524,8 +608,7 @@ export default function RememberScreen() {
       {/* Seed grid */}
       <ScrollView showsVerticalScrollIndicator={false} style={s.scroll}>
         <RNAnimated.View style={[s.grid, { transform: [{ scale: frenzyZoomAnim }, { translateX: shakeAnim }] }]}>
-          {facts.map((fact, idx) => {
-            const isRevealed = revealedCard === idx;
+          {answerOptions.map((fact, idx) => {
             const isWrong = wrongCard === idx;
             const isCorrect = correctCard === idx;
 
@@ -534,24 +617,21 @@ export default function RememberScreen() {
                 key={fact.id}
                 style={[
                   s.seed,
-                  isRevealed && s.seedRevealed,
-                  isWrong && s.seedWrong,
-                  isCorrect && s.seedCorrect,
+                  { backgroundColor: colors.card, borderColor: colors.border },
+                  isWrong && [s.seedWrong, { backgroundColor: colors.dangerSoft, borderColor: colors.danger }],
+                  isCorrect && [s.seedCorrect, { backgroundColor: colors.accentSoft, borderColor: colors.accent }],
                 ]}
-                onPress={() => isStudy ? handleStudyTap(idx) : handleChallengeTap(idx)}
+                onPress={() => handleChallengeTap(idx)}
                 activeOpacity={0.7}
               >
                 <Text
                   style={[
                     s.seedText,
-                    isRevealed && s.seedTextRevealed,
                     isCorrect && s.seedTextCorrect,
                   ]}
-                  numberOfLines={isRevealed ? 4 : 2}
+                  numberOfLines={2}
                 >
-                  {isStudy
-                    ? (isRevealed ? fact.definition : fact.term)
-                    : (isCorrect || isWrong ? fact.term : "🌱")}
+                  {fact.term}
                 </Text>
               </TouchableOpacity>
             );
@@ -566,7 +646,7 @@ export default function RememberScreen() {
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#FFF8F0", paddingHorizontal: 20, paddingTop: 56, paddingBottom: 20 },
+  container: { flex: 1, paddingHorizontal: 20, paddingTop: 56, paddingBottom: 20 },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
   bigEmoji: { fontSize: 64, marginBottom: 12 },
   title: { fontSize: 26, fontWeight: "700", color: "#4A4A4A", marginBottom: 8 },
@@ -588,15 +668,19 @@ const s = StyleSheet.create({
   back: { fontSize: 16, color: "#7DB58D", fontWeight: "600", marginBottom: 10 },
   tag: { fontSize: 13, fontWeight: "700", color: "#7DB58D", textTransform: "uppercase", letterSpacing: 1 },
   banner: { borderRadius: 16, padding: 14, marginBottom: 10 },
-  bannerStudy: { backgroundColor: "#E8F5E9" },
-  bannerChallenge: { backgroundColor: "#FFF3E0" },
+  bannerStudy: { },
+  bannerChallenge: { },
   bannerRow: { flexDirection: "row", alignItems: "center" },
   bannerTitle: { fontSize: 15, fontWeight: "700", color: "#4A4A4A", marginBottom: 4 },
   bannerDesc: { fontSize: 12, color: "#7DB58D" },
   readyBtn: { backgroundColor: "#7DB58D", borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8, marginLeft: 10 },
   readyBtnText: { color: "#FFF", fontSize: 13, fontWeight: "700" },
-  defBox: { backgroundColor: "#FFF", borderRadius: 12, padding: 12, marginTop: 6 },
+  defBox: { borderRadius: 12, padding: 12, marginTop: 6, borderWidth: 1 },
   defText: { fontSize: 14, color: "#4A4A4A", lineHeight: 20 },
+  hintRow: { marginTop: 10 },
+  hintBtn: { alignSelf: "flex-start", borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6, marginBottom: 6 },
+  hintBtnText: { color: "#FFF", fontSize: 12, fontWeight: "700" },
+  hintText: { fontSize: 12, lineHeight: 18 },
   stats: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
   timer: { fontSize: 22, fontWeight: "800" },
   seedCount: { fontSize: 14, fontWeight: "600", color: "#4A4A4A" },
@@ -607,15 +691,15 @@ const s = StyleSheet.create({
   goldenText: { fontSize: 28, fontWeight: "900", color: "#FFD700", textShadowColor: "rgba(0,0,0,0.3)", textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 4 },
   scroll: { flex: 1 },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingBottom: 16 },
-  seed: { width: "47%", backgroundColor: "#FFF", borderWidth: 1.5, borderColor: "#E0E0E0", borderRadius: 14, padding: 12, minHeight: 64, justifyContent: "center", alignItems: "center" },
-  seedRevealed: { backgroundColor: "#F0FAF3", borderColor: "#7DB58D" },
-  seedWrong: { backgroundColor: "#FFEBEE", borderColor: "#E57373" },
-  seedCorrect: { backgroundColor: "#E8F5E9", borderColor: "#66BB6A" },
+  seed: { width: "47%", borderWidth: 1.5, borderRadius: 14, padding: 12, minHeight: 64, justifyContent: "center", alignItems: "center" },
+  seedRevealed: { },
+  seedWrong: { },
+  seedCorrect: { },
   seedText: { fontSize: 13, fontWeight: "600", color: "#4A4A4A", textAlign: "center" },
   seedTextRevealed: { color: "#7DB58D", fontSize: 11, fontWeight: "500" },
   seedTextCorrect: { color: "#2E7D32" },
   hookOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
-  hookCard: { backgroundColor: "#FFF8F0", borderRadius: 20, padding: 28, width: "85%", alignItems: "center", borderWidth: 2, borderColor: "#7DB58D" },
+  hookCard: { borderRadius: 20, padding: 28, width: "85%", alignItems: "center", borderWidth: 2 },
   hookEmoji: { fontSize: 48, marginBottom: 8 },
   hookTitle: { fontSize: 18, fontWeight: "700", color: "#7DB58D", marginBottom: 8 },
   hookBody: { fontSize: 15, color: "#4A4A4A", textAlign: "center", lineHeight: 22, marginBottom: 12 },

@@ -10,6 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Switch,
 } from "react-native";
 import {
   createUserWithEmailAndPassword,
@@ -23,6 +24,7 @@ import * as WebBrowser from "expo-web-browser";
 import { Redirect, useRouter } from "expo-router";
 import { auth, db } from "../firebaseConfig";
 import { useAuth } from "../context/AuthContext";
+import { useTheme } from "../context/ThemeContext";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -32,6 +34,7 @@ const GOOGLE_WEB_CLIENT_ID =
 export default function LoginScreen() {
   const { user } = useAuth();
   const router = useRouter();
+  const { isDark, colors, toggleTheme } = useTheme();
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -49,7 +52,7 @@ export default function LoginScreen() {
   }, [response]);
 
   if (user) {
-    return <Redirect href="/home" />;
+    return <Redirect href="/(tabs)" />;
   }
 
   const handleGoogleCredential = async (idToken: string) => {
@@ -70,7 +73,7 @@ export default function LoginScreen() {
         });
       }
 
-      router.replace("/home");
+      router.replace("/(tabs)");
     } catch (error: any) {
       Alert.alert("Google Sign-In Failed", error?.message || String(error));
     } finally {
@@ -101,7 +104,7 @@ export default function LoginScreen() {
           study_materials: [],
         });
       }
-      router.replace("/home");
+      router.replace("/(tabs)");
     } catch (error: any) {
       const msg = getFriendlyError(error.code);
       Alert.alert("Something went wrong", msg);
@@ -133,22 +136,32 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: colors.background }]}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
-      <StatusBar style="dark" />
+      <StatusBar style={isDark ? "light" : "dark"} />
 
       <View style={styles.header}>
         <Text style={styles.logo}>🌱</Text>
-        <Text style={styles.title}>BloomLearn</Text>
-        <Text style={styles.subtitle}>Grow your knowledge</Text>
+        <Text style={[styles.title, { color: colors.text }]}>BloomLearn</Text>
+        <Text style={[styles.subtitle, { color: colors.muted }]}>Grow your knowledge</Text>
+      </View>
+
+      <View style={styles.themeRow}>
+        <Text style={[styles.themeLabel, { color: colors.muted }]}>Dark mode</Text>
+        <Switch
+          value={isDark}
+          onValueChange={toggleTheme}
+          trackColor={{ false: "#D8D0C6", true: "#4B6B55" }}
+          thumbColor={isDark ? "#8BC49B" : "#F5F1EB"}
+        />
       </View>
 
       <View style={styles.form}>
         <TextInput
-          style={styles.input}
+          style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border }]}
           placeholder="Email"
-          placeholderTextColor="#B0B0B0"
+          placeholderTextColor={colors.muted}
           value={email}
           onChangeText={setEmail}
           keyboardType="email-address"
@@ -156,16 +169,16 @@ export default function LoginScreen() {
           autoCorrect={false}
         />
         <TextInput
-          style={styles.input}
+          style={[styles.input, { backgroundColor: colors.card, borderColor: colors.border }]}
           placeholder="Password"
-          placeholderTextColor="#B0B0B0"
+          placeholderTextColor={colors.muted}
           value={password}
           onChangeText={setPassword}
           secureTextEntry
         />
 
         <TouchableOpacity
-          style={[styles.button, loading && styles.buttonDisabled]}
+          style={[styles.button, { backgroundColor: colors.accent }, loading && styles.buttonDisabled]}
           onPress={handleAuth}
           disabled={loading}
           activeOpacity={0.8}
@@ -180,21 +193,25 @@ export default function LoginScreen() {
         </TouchableOpacity>
 
         <View style={styles.dividerContainer}>
-          <View style={styles.dividerLine} />
-          <Text style={styles.dividerText}>or</Text>
-          <View style={styles.dividerLine} />
+          <View style={[styles.dividerLine, { backgroundColor: colors.border }]} />
+          <Text style={[styles.dividerText, { color: colors.muted }]}>or</Text>
+          <View style={[styles.dividerLine, { backgroundColor: colors.border }]} />
         </View>
 
         <TouchableOpacity
-          style={[styles.googleButton, googleLoading && styles.buttonDisabled]}
+          style={[
+            styles.googleButton,
+            { backgroundColor: colors.card, borderColor: colors.border },
+            googleLoading && styles.buttonDisabled,
+          ]}
           onPress={() => promptAsync()}
           disabled={!request || googleLoading}
           activeOpacity={0.8}
         >
           {googleLoading ? (
-            <ActivityIndicator color="#4A4A4A" />
+            <ActivityIndicator color={colors.text} />
           ) : (
-            <Text style={styles.googleButtonText}>Sign in with Google</Text>
+            <Text style={[styles.googleButtonText, { color: colors.text }]}>Sign in with Google</Text>
           )}
         </TouchableOpacity>
 
@@ -202,11 +219,13 @@ export default function LoginScreen() {
           onPress={() => setIsLogin(!isLogin)}
           style={styles.toggleContainer}
         >
-          <Text style={styles.toggleText}>
+          <Text style={[styles.toggleText, { color: colors.muted }]}
+          >
             {isLogin
               ? "Don't have an account? "
               : "Already have an account? "}
-            <Text style={styles.toggleLink}>
+            <Text style={[styles.toggleLink, { color: colors.accent }]}
+            >
               {isLogin ? "Sign Up" : "Log In"}
             </Text>
           </Text>
@@ -219,13 +238,23 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#FFF8F0",
     justifyContent: "center",
     paddingHorizontal: 32,
   },
   header: {
     alignItems: "center",
     marginBottom: 48,
+  },
+  themeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    marginBottom: 24,
+  },
+  themeLabel: {
+    fontSize: 13,
+    fontWeight: "600",
   },
   logo: {
     fontSize: 56,
@@ -234,12 +263,10 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 32,
     fontWeight: "700",
-    color: "#4A4A4A",
     letterSpacing: 0.5,
   },
   subtitle: {
     fontSize: 16,
-    color: "#9E9E9E",
     marginTop: 6,
     letterSpacing: 0.3,
   },
@@ -247,18 +274,14 @@ const styles = StyleSheet.create({
     width: "100%",
   },
   input: {
-    backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: "#E0E0E0",
     borderRadius: 14,
     paddingHorizontal: 18,
     paddingVertical: 14,
     fontSize: 16,
-    color: "#4A4A4A",
     marginBottom: 16,
   },
   button: {
-    backgroundColor: "#7DB58D",
     borderRadius: 14,
     paddingVertical: 16,
     alignItems: "center",
@@ -281,23 +304,18 @@ const styles = StyleSheet.create({
   dividerLine: {
     flex: 1,
     height: 1,
-    backgroundColor: "#E0E0E0",
   },
   dividerText: {
     marginHorizontal: 16,
     fontSize: 14,
-    color: "#9E9E9E",
   },
   googleButton: {
-    backgroundColor: "#FFFFFF",
     borderWidth: 1.5,
-    borderColor: "#E0E0E0",
     borderRadius: 14,
     paddingVertical: 16,
     alignItems: "center",
   },
   googleButtonText: {
-    color: "#4A4A4A",
     fontSize: 17,
     fontWeight: "600",
     letterSpacing: 0.3,
@@ -308,10 +326,8 @@ const styles = StyleSheet.create({
   },
   toggleText: {
     fontSize: 14,
-    color: "#9E9E9E",
   },
   toggleLink: {
-    color: "#7DB58D",
     fontWeight: "600",
   },
 });

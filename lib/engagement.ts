@@ -187,3 +187,12 @@ export function calculateFinalAccuracy(
   const boosted = baseAccuracy * avgComboMultiplier + fastFinishBonus;
   return Math.min(1, Math.max(0, boosted));
 }
+
+// ─── Knowledge Pests ───────────────────────────────────
+
+export function shouldSpawnPest(combo: number): boolean {
+  // Pests only spawn if doing well (combo >= 3)
+  if (combo < 3) return false;
+  // 15% chance to spawn a pest when eligible
+  return Math.random() < 0.15;
+}

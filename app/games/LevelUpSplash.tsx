@@ -8,6 +8,7 @@ import {
   Modal,
 } from "react-native";
 import { triggerHaptic } from "../../lib/engagement";
+import { useTheme } from "../../context/ThemeContext";
 
 interface LevelUpSplashProps {
   visible: boolean;
@@ -22,6 +23,7 @@ export default function LevelUpSplash({
   statName,
   onDismiss,
 }: LevelUpSplashProps) {
+  const { colors } = useTheme();
   const scaleAnim = useRef(new Animated.Value(0.5)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
 
@@ -49,6 +51,7 @@ export default function LevelUpSplash({
         <Animated.View
           style={[
             styles.card,
+            { backgroundColor: colors.card, borderColor: colors.accent },
             { transform: [{ scale: scaleAnim }], opacity: opacityAnim },
           ]}
         >
@@ -73,13 +76,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   card: {
-    backgroundColor: "#FFF8F0",
     borderRadius: 24,
     padding: 40,
     alignItems: "center",
     width: "80%",
     borderWidth: 3,
-    borderColor: "#FFD700",
   },
   emoji: { fontSize: 72, marginBottom: 12 },
   title: {

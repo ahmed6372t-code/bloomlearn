@@ -19,17 +19,21 @@ import { useAuth } from "../context/AuthContext";
 import { useProgress } from "../context/ProgressContext";
 import { functions } from "../firebaseConfig";
 import type { RecipeMatrix } from "../lib/gemini";
+import { useTheme } from "../context/ThemeContext";
 
 export default function ImportScreen() {
   const { user } = useAuth();
   const router = useRouter();
   const { registerMaterial } = useProgress();
+  const { isDark, colors } = useTheme();
   const [text, setText] = useState("");
   const [isBaking, setIsBaking] = useState(false);
   const [progressText, setProgressText] = useState("");
   const [progressPercent, setProgressPercent] = useState(0);
   const inputRef = useRef<TextInput>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
+
+
 
   if (!user) {
     return <Redirect href="/login" />;
@@ -60,8 +64,16 @@ export default function ImportScreen() {
     pulseAnim.setValue(1);
   };
 
-  const handleProcess = async () => {
-    if (!isValid) {
+  // textInput — used for paste flow (direct text bypass)
+  // fileOverride — used for file flow (storageUri → multimodal Cloud Function)
+  const handleProcess = async (
+    textInput?: string,
+    fileOverride?: { storageUri: string; downloadUrl?: string; mimeType?: string }
+  ) => {
+    const content = (textInput ?? text).trim();
+
+    // Skip the 50-char check for file uploads — the function validates server-side
+    if (!fileOverride && content.length < 50) {
       Alert.alert(
         "Not enough content",
         "Please paste at least 50 characters of study material so we can generate meaningful activities."
@@ -70,20 +82,22 @@ export default function ImportScreen() {
     }
 
     Keyboard.dismiss();
-    startPulse();
-    setIsBaking(true);
-    setProgressText("Starting...");
-    setProgressPercent(0);
+    // Don't re-start pulse/baking state if already set (file upload path pre-sets it)
+    if (!fileOverride) {
+      startPulse();
+      setIsBaking(true);
+      setProgressText("Starting...");
+      setProgressPercent(0);
+    }
 
     try {
-      // Simulated progress while Cloud Function runs
       setProgressText("Preparing the soil...");
-      setProgressPercent(15);
+      if (!fileOverride) setProgressPercent(15);
 
-      const bakeMaterial = httpsCallable<{ text: string }, RecipeMatrix>(
-        functions,
-        "bakeMaterial"
-      );
+      const bakeMaterial = httpsCallable<
+      { text?: string; storageUri?: string; downloadUrl?: string; mimeType?: string },
+      RecipeMatrix
+      >(functions, "bakeMaterial");
 
       const progressTimer = setInterval(() => {
         setProgressPercent((prev) => {
@@ -96,16 +110,21 @@ export default function ImportScreen() {
             prev < 30
               ? "Digging the garden bed..."
               : prev < 55
-              ? "Sorting the seed packets..."
-              : prev < 75
-              ? "Planting knowledge seeds..."
-              : "Watering the fresh soil...";
+                ? "Sorting the seed packets..."
+                : prev < 75
+                  ? "Planting knowledge seeds..."
+                  : "Watering the fresh soil...";
           setProgressText(messages);
           return prev + step;
         });
       }, 1500);
 
-      const result = await bakeMaterial({ text: text.trim() });
+      // File upload path → multimodal; text paste path → plain text
+      const payload = fileOverride
+        ? { storageUri: fileOverride.storageUri, downloadUrl: fileOverride.downloadUrl, mimeType: fileOverride.mimeType }
+        : { text: content };
+
+      const result = await bakeMaterial(payload);
       clearInterval(progressTimer);
 
       const matrix = result.data;
@@ -113,15 +132,16 @@ export default function ImportScreen() {
       setProgressPercent(100);
 
       const materialId = Date.now().toString(36);
+      const sourceLabel = fileOverride ? `[file] ${fileOverride.storageUri}` : content;
 
-      // Save everything to local context (and Firestore via ProgressContext)
-      registerMaterial(materialId, matrix.topic_title, "Imported", text.trim(), matrix);
+      // Register in ProgressContext → saved to Firestore + local state
+      registerMaterial(materialId, matrix.topic_title, "Imported", sourceLabel, matrix);
 
       stopPulse();
       setIsBaking(false);
 
       router.push({
-        pathname: "/games",
+        pathname: "/games/remember",
         params: { materialId },
       });
     } catch (error: any) {
@@ -134,17 +154,18 @@ export default function ImportScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: colors.background }]}
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
-      <StatusBar style="dark" />
+      <StatusBar style={isDark ? "light" : "dark"} />
 
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} activeOpacity={0.6}>
-          <Text style={styles.backButton}>← Back</Text>
+          <Text style={[styles.backButton, { color: colors.accent }]}>← Back</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Plant New Seeds</Text>
-        <Text style={styles.subtitle}>
+        <Text style={[styles.title, { color: colors.text }]}>Plant New Seeds</Text>
+        <Text style={[styles.subtitle, { color: colors.muted }]}
+        >
           Paste your study material and we'll plant it into your learning garden.
         </Text>
       </View>
@@ -154,35 +175,40 @@ export default function ImportScreen() {
           <Animated.Text style={[styles.loadingEmoji, { opacity: pulseAnim }]}>
             🌱
           </Animated.Text>
-          <Text style={styles.loadingText}>{progressText}</Text>
+          <Text style={[styles.loadingText, { color: colors.muted }]}>{progressText}</Text>
 
           {/* Progress bar */}
-          <View style={styles.progressTrack}>
-            <View style={[styles.progressFill, { width: `${progressPercent}%` }]} />
+          <View style={[styles.progressTrack, { backgroundColor: colors.border }]}>
+            <View
+              style={[styles.progressFill, { width: `${progressPercent}%`, backgroundColor: colors.accent }]}
+            />
           </View>
-          <Text style={styles.progressPercent}>{progressPercent}%</Text>
+          <Text style={[styles.progressPercent, { color: colors.muted }]}>{progressPercent}%</Text>
 
           <ActivityIndicator
-            color="#7DB58D"
+            color={colors.accent}
             size="small"
             style={{ marginTop: 16 }}
           />
         </View>
       ) : (
         <>
+
           <View style={styles.inputWrapper}>
             <TextInput
               ref={inputRef}
-              style={styles.textInput}
+              style={[styles.textInput, { backgroundColor: colors.card, borderColor: colors.border, color: colors.text }]}
               placeholder="Paste your notes, textbook excerpt, article, or any study material here..."
-              placeholderTextColor="#C4C4C4"
+              placeholderTextColor={colors.muted}
               value={text}
               onChangeText={setText}
               multiline
               textAlignVertical="top"
               autoCorrect={false}
             />
-            <Text style={[styles.charCount, isValid && styles.charCountValid]}>
+            <Text
+              style={[styles.charCount, { color: isValid ? colors.accent : colors.muted }]}
+            >
               {charCount} characters{charCount < 50 ? " (min 50)" : ""}
             </Text>
           </View>
@@ -190,9 +216,10 @@ export default function ImportScreen() {
           <TouchableOpacity
             style={[
               styles.processButton,
+              { backgroundColor: colors.accent },
               !isValid && styles.processButtonDisabled,
             ]}
-            onPress={handleProcess}
+            onPress={() => handleProcess()}
             disabled={!isValid}
             activeOpacity={0.8}
           >
@@ -207,7 +234,6 @@ export default function ImportScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#FFF8F0",
     paddingHorizontal: 24,
     paddingTop: 64,
     paddingBottom: 32,
@@ -217,19 +243,16 @@ const styles = StyleSheet.create({
   },
   backButton: {
     fontSize: 16,
-    color: "#7DB58D",
     fontWeight: "600",
     marginBottom: 20,
   },
   title: {
     fontSize: 26,
     fontWeight: "700",
-    color: "#4A4A4A",
     letterSpacing: 0.3,
   },
   subtitle: {
     fontSize: 15,
-    color: "#9E9E9E",
     marginTop: 8,
     lineHeight: 22,
   },
@@ -245,7 +268,6 @@ const styles = StyleSheet.create({
   loadingText: {
     fontSize: 18,
     fontWeight: "600",
-    color: "#7DB58D",
     letterSpacing: 0.3,
     textAlign: "center",
     marginBottom: 20,
@@ -253,18 +275,15 @@ const styles = StyleSheet.create({
   progressTrack: {
     width: "80%",
     height: 8,
-    backgroundColor: "#E8E8E8",
     borderRadius: 4,
     overflow: "hidden",
   },
   progressFill: {
     height: 8,
-    backgroundColor: "#7DB58D",
     borderRadius: 4,
   },
   progressPercent: {
     fontSize: 13,
-    color: "#9E9E9E",
     marginTop: 6,
   },
   inputWrapper: {
@@ -273,28 +292,20 @@ const styles = StyleSheet.create({
   },
   textInput: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
     borderWidth: 1,
-    borderColor: "#E0E0E0",
     borderRadius: 16,
     paddingHorizontal: 18,
     paddingTop: 16,
     paddingBottom: 16,
     fontSize: 16,
-    color: "#4A4A4A",
     lineHeight: 24,
   },
   charCount: {
     fontSize: 13,
-    color: "#C4C4C4",
     textAlign: "right",
     marginTop: 8,
   },
-  charCountValid: {
-    color: "#7DB58D",
-  },
   processButton: {
-    backgroundColor: "#7DB58D",
     borderRadius: 14,
     paddingVertical: 16,
     alignItems: "center",
@@ -308,4 +319,5 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     letterSpacing: 0.3,
   },
+
 });
